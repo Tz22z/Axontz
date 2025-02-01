@@ -1,0 +1,23 @@
+# Build artifacts
+bin/
+*.o
+*.a
+*.so
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test results
+results/*.txt
+results/*.csv
+
+# Temporary files
+*.tmp
+*~

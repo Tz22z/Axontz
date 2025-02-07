@@ -1,13 +1,44 @@
 # MemPlumber Memory Allocator
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g -Iinclude
+SRCDIR = src
+INCDIR = include
+TESTDIR = tests
 BINDIR = bin
 
-.PHONY: all clean
+# Source files
+SOURCES = $(wildcard $(SRCDIR)/*.cpp)
+OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(BINDIR)/%.o)
 
-all:
-	@echo "MemPlumber project initialized"
-	@echo "Build system ready for implementation"
+# Test files
+TEST_SOURCES = $(wildcard $(TESTDIR)/*.cpp)
+TEST_OBJECTS = $(TEST_SOURCES:$(TESTDIR)/%.cpp=$(BINDIR)/%.o)
+
+.PHONY: all clean test test-basic test-allocator
+
+all: $(BINDIR)/test_basic $(BINDIR)/test_free_list_allocator
+
+test: test-basic test-allocator
+
+test-basic: $(BINDIR)/test_basic
+	@echo "Running basic tests..."
+	./$(BINDIR)/test_basic
+
+test-allocator: $(BINDIR)/test_free_list_allocator
+	@echo "Running allocator tests..."
+	./$(BINDIR)/test_free_list_allocator
+
+$(BINDIR)/test_basic: $(OBJECTS) $(BINDIR)/test_basic.o | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(BINDIR)/test_free_list_allocator: $(OBJECTS) $(BINDIR)/test_free_list_allocator.o | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(BINDIR)/%.o: $(SRCDIR)/%.cpp | $(BINDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BINDIR)/%.o: $(TESTDIR)/%.cpp | $(BINDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
 	rm -rf $(BINDIR)/*

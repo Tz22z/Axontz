@@ -14,7 +14,16 @@ FreeListAllocator::FreeListAllocator(MemorySource& memory_source, size_t initial
     
     std::cout << "FreeListAllocator created with block size: " << initial_block_size << std::endl;
     
-    // TODO: 在后续版本中添加初始内存分配
+    // 确保默认块大小足够大
+    default_block_size_ = std::max(default_block_size_, 
+                                   sizeof(MemoryRegion) + sizeof(FreeBlock) + 256);
+    
+    // 创建初始内存区域
+    if (!expand_heap(default_block_size_)) {
+        throw std::bad_alloc();
+    }
+    
+    std::cout << "FreeListAllocator initialization complete" << std::endl;
 }
 
 FreeListAllocator::~FreeListAllocator() {
@@ -82,7 +91,24 @@ void* FreeListAllocator::allocate_from_free_list(size_t size, size_t alignment) 
 }
 
 void FreeListAllocator::add_to_free_list(FreeBlock* block) {
-    // 暂未实现
+    if (block == nullptr) {
+        std::cout << "Warning: Attempted to add null block to free list" << std::endl;
+        return;
+    }
+    
+    std::cout << "Adding block " << block << " (size: " << block->size << ") to free list" << std::endl;
+    
+    // 简单的头部插入策略
+    block->next = free_list_head_;
+    block->prev = nullptr;
+    
+    if (free_list_head_ != nullptr) {
+        free_list_head_->prev = block;
+    }
+    
+    free_list_head_ = block;
+    
+    std::cout << "Free list head now: " << free_list_head_ << std::endl;
 }
 
 void FreeListAllocator::remove_from_free_list(FreeBlock* block) {
@@ -103,8 +129,46 @@ void FreeListAllocator::coalesce_free_blocks() {
 }
 
 bool FreeListAllocator::expand_heap(size_t min_size) {
-    // 暂未实现
-    return false;
+    std::cout << "Expanding heap with min_size: " << min_size << std::endl;
+    
+    // 确保请求的大小至少能容纳区域描述符和一个自由块
+    size_t region_size = std::max(min_size, default_block_size_);
+    region_size = std::max(region_size, sizeof(MemoryRegion) + sizeof(FreeBlock));
+    
+    // 从OS获取内存
+    void* new_region = memory_source_.allocate_block(region_size);
+    if (new_region == nullptr) {
+        std::cout << "Failed to allocate " << region_size << " bytes from OS" << std::endl;
+        return false;
+    }
+    
+    std::cout << "Got " << region_size << " bytes from OS at " << new_region << std::endl;
+    
+    // 在区域开始处放置区域描述符
+    MemoryRegion* region_desc = static_cast<MemoryRegion*>(new_region);
+    region_desc->start = new_region;
+    region_desc->size = region_size;
+    region_desc->next = regions_head_;
+    
+    // 将新区域链接到区域列表
+    regions_head_ = region_desc;
+    
+    // 在区域描述符后创建自由块
+    char* region_start = static_cast<char*>(new_region);
+    char* free_block_start = region_start + sizeof(MemoryRegion);
+    FreeBlock* free_block = reinterpret_cast<FreeBlock*>(free_block_start);
+    
+    // 设置自由块
+    free_block->size = region_size - sizeof(MemoryRegion);
+    free_block->next = nullptr;
+    free_block->prev = nullptr;
+    
+    std::cout << "Created free block at " << free_block << " with size " << free_block->size << std::endl;
+    
+    // 将自由块添加到自由列表
+    add_to_free_list(free_block);
+    
+    return true;
 }
 
 size_t FreeListAllocator::align_size(size_t size, size_t alignment) {

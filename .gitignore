@@ -21,3 +21,8 @@ results/*.csv
 # Temporary files
 *.tmp
 *~
+
+# Development progress and notes (not for version control)
+PROGRESS.md
+NOTES.md
+TODO.md

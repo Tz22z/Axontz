@@ -37,18 +37,39 @@ void* FreeListAllocator::allocate(size_t size, size_t alignment) {
         return nullptr;
     }
     
+    // 确保对齐是2的幂
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+        alignment = sizeof(void*);
+    }
+    
     std::cout << "Allocating " << size << " bytes (alignment: " << alignment << ")" << std::endl;
     
-    // 临时实现：直接从MemorySource分配
-    // TODO: 在后续版本中实现真正的自由列表分配
-    void* ptr = memory_source_.allocate_block(size);
+    // 首先尝试从自由列表分配
+    void* ptr = allocate_from_free_list(size, alignment);
+    
+    if (ptr == nullptr) {
+        // 自由列表中没有合适的块，需要扩展堆
+        std::cout << "No suitable block in free list, expanding heap" << std::endl;
+        
+        size_t expand_size = std::max(size + alignment, default_block_size_);
+        if (!expand_heap(expand_size)) {
+            std::cout << "Failed to expand heap" << std::endl;
+            stats_.failed_allocations++;
+            return nullptr;
+        }
+        
+        // 扩展后再次尝试分配
+        ptr = allocate_from_free_list(size, alignment);
+    }
     
     if (ptr != nullptr) {
         stats_.total_allocated += size;
         stats_.current_usage += size;
         stats_.allocation_count++;
+        std::cout << "Successfully allocated " << size << " bytes at " << ptr << std::endl;
     } else {
         stats_.failed_allocations++;
+        std::cout << "Allocation failed for " << size << " bytes" << std::endl;
     }
     
     return ptr;
@@ -86,8 +107,28 @@ void FreeListAllocator::reset_stats() {
 
 // TODO: 在后续版本中实现这些私有方法
 void* FreeListAllocator::allocate_from_free_list(size_t size, size_t alignment) {
-    // 暂未实现
-    return nullptr;
+    std::cout << "Trying to allocate " << size << " bytes from free list" << std::endl;
+    
+    // 查找合适的块
+    FreeBlock* suitable_block = find_suitable_block(size, alignment);
+    if (suitable_block == nullptr) {
+        std::cout << "No suitable block found in free list" << std::endl;
+        return nullptr;
+    }
+    
+    // 从自由列表中移除这个块
+    remove_from_free_list(suitable_block);
+    
+    // 计算对齐的指针
+    void* aligned_ptr = align_pointer(suitable_block, alignment);
+    
+    // 简单实现：暂时不分割块，直接返回整个块
+    // TODO: 后续实现split_block来提高内存利用率
+    
+    std::cout << "Allocated " << suitable_block->size << " bytes at " << aligned_ptr 
+              << " (requested " << size << " bytes)" << std::endl;
+    
+    return aligned_ptr;
 }
 
 void FreeListAllocator::add_to_free_list(FreeBlock* block) {
@@ -112,11 +153,58 @@ void FreeListAllocator::add_to_free_list(FreeBlock* block) {
 }
 
 void FreeListAllocator::remove_from_free_list(FreeBlock* block) {
-    // 暂未实现
+    if (block == nullptr) {
+        std::cout << "Warning: Attempted to remove null block from free list" << std::endl;
+        return;
+    }
+    
+    std::cout << "Removing block " << block << " from free list" << std::endl;
+    
+    // 更新前驱节点的next指针
+    if (block->prev != nullptr) {
+        block->prev->next = block->next;
+    } else {
+        // 这是头节点
+        free_list_head_ = block->next;
+    }
+    
+    // 更新后继节点的prev指针
+    if (block->next != nullptr) {
+        block->next->prev = block->prev;
+    }
+    
+    // 清理被移除块的指针
+    block->next = nullptr;
+    block->prev = nullptr;
+    
+    std::cout << "Block removed, new head: " << free_list_head_ << std::endl;
 }
 
 FreeListAllocator::FreeBlock* FreeListAllocator::find_suitable_block(size_t size, size_t alignment) {
-    // 暂未实现
+    std::cout << "Looking for block of size " << size << " with alignment " << alignment << std::endl;
+    
+    FreeBlock* current = free_list_head_;
+    while (current != nullptr) {
+        std::cout << "  Checking block at " << current << " with size " << current->size << std::endl;
+        
+        // 检查这个块是否足够大
+        if (current->size >= size) {
+            // 检查对齐要求
+            char* block_start = reinterpret_cast<char*>(current);
+            char* aligned_start = reinterpret_cast<char*>(align_pointer(block_start, alignment));
+            char* block_end = block_start + current->size;
+            
+            // 确保对齐后仍有足够空间
+            if (aligned_start + size <= block_end) {
+                std::cout << "  Found suitable block at " << current << std::endl;
+                return current;
+            }
+        }
+        
+        current = current->next;
+    }
+    
+    std::cout << "  No suitable block found" << std::endl;
     return nullptr;
 }
 

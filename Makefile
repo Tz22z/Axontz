@@ -14,11 +14,11 @@ OBJECTS = $(SOURCES:$(SRCDIR)/%.cpp=$(BINDIR)/%.o)
 TEST_SOURCES = $(wildcard $(TESTDIR)/*.cpp)
 TEST_OBJECTS = $(TEST_SOURCES:$(TESTDIR)/%.cpp=$(BINDIR)/%.o)
 
-.PHONY: all clean test test-basic test-allocator
+.PHONY: all clean test test-basic test-allocator test-reuse
 
-all: $(BINDIR)/test_basic $(BINDIR)/test_free_list_allocator
+all: $(BINDIR)/test_basic $(BINDIR)/test_free_list_allocator $(BINDIR)/test_memory_reuse
 
-test: test-basic test-allocator
+test: test-basic test-allocator test-reuse
 
 test-basic: $(BINDIR)/test_basic
 	@echo "Running basic tests..."
@@ -28,10 +28,17 @@ test-allocator: $(BINDIR)/test_free_list_allocator
 	@echo "Running allocator tests..."
 	./$(BINDIR)/test_free_list_allocator
 
+test-reuse: $(BINDIR)/test_memory_reuse
+	@echo "Running memory reuse tests..."
+	./$(BINDIR)/test_memory_reuse
+
 $(BINDIR)/test_basic: $(OBJECTS) $(BINDIR)/test_basic.o | $(BINDIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
 $(BINDIR)/test_free_list_allocator: $(OBJECTS) $(BINDIR)/test_free_list_allocator.o | $(BINDIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@
+
+$(BINDIR)/test_memory_reuse: $(OBJECTS) $(BINDIR)/test_memory_reuse.o | $(BINDIR)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
 $(BINDIR)/%.o: $(SRCDIR)/%.cpp | $(BINDIR)

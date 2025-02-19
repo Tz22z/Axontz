@@ -82,13 +82,32 @@ void FreeListAllocator::deallocate(void* ptr, size_t size) {
     
     std::cout << "Deallocating " << size << " bytes at " << ptr << std::endl;
     
-    // 临时实现：直接释放回MemorySource
-    // TODO: 在后续版本中实现真正的自由列表管理
-    memory_source_.deallocate_block(ptr, size);
+    // 验证这个指针确实属于我们
+    if (!owns(ptr)) {
+        std::cout << "Warning: Attempt to deallocate pointer not owned by this allocator" << std::endl;
+        return;
+    }
     
+    // 将内存块转换为自由块并加入自由列表
+    FreeBlock* block = static_cast<FreeBlock*>(ptr);
+    
+    // 设置块的大小 - 这里我们需要恢复原始分配的大小
+    // 简化实现：使用请求的大小，但确保最小大小
+    block->size = std::max(size, sizeof(FreeBlock));
+    block->next = nullptr;
+    block->prev = nullptr;
+    
+    std::cout << "Converting " << ptr << " back to free block with size " << block->size << std::endl;
+    
+    // 将块添加回自由列表
+    add_to_free_list(block);
+    
+    // 更新统计信息
     stats_.total_deallocated += size;
     stats_.current_usage -= size;
     stats_.deallocation_count++;
+    
+    std::cout << "Successfully returned block to free list" << std::endl;
 }
 
 bool FreeListAllocator::owns(void* ptr) const {

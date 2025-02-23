@@ -87,26 +87,36 @@ void FreeListAllocator::deallocate(void* ptr, size_t size) {
         std::cout << "Warning: Attempt to deallocate pointer not owned by this allocator" << std::endl;
         return;
     }
-    
-    // 将内存块转换为自由块并加入自由列表
-    FreeBlock* block = static_cast<FreeBlock*>(ptr);
-    
-    // 设置块的大小 - 这里我们需要恢复原始分配的大小
-    // 简化实现：使用请求的大小，但确保最小大小
-    block->size = std::max(size, sizeof(FreeBlock));
+    // 读取分配头部来恢复真实的分配跨度
+    const size_t header_size = sizeof(AllocationHeader);
+    char* user_ptr = static_cast<char*>(ptr);
+    AllocationHeader* header = reinterpret_cast<AllocationHeader*>(user_ptr - header_size);
+
+    // 先保存头部数据，避免在构造自由块时覆盖
+    size_t payload = header->requested;
+    size_t free_size = header->span;
+    size_t saved_prefix = header->prefix_size;
+    char* free_start = reinterpret_cast<char*>(header) - saved_prefix;
+
+    // 构造自由块并回收到自由列表
+    FreeBlock* block = reinterpret_cast<FreeBlock*>(free_start);
+    block->size = free_size;
     block->next = nullptr;
     block->prev = nullptr;
-    
-    std::cout << "Converting " << ptr << " back to free block with size " << block->size << std::endl;
-    
-    // 将块添加回自由列表
+
+    std::cout << "Converting allocated span back to free block at " << (void*)free_start
+              << " with size " << free_size << std::endl;
+
     add_to_free_list(block);
-    
-    // 更新统计信息
-    stats_.total_deallocated += size;
-    stats_.current_usage -= size;
+
+    // 使用真实请求大小更新统计信息
+    std::cout << "Stats before dealloc: current_usage=" << stats_.current_usage
+              << ", payload=" << payload << std::endl;
+    stats_.total_deallocated += payload;
+    stats_.current_usage -= payload;
     stats_.deallocation_count++;
-    
+    std::cout << "Stats after dealloc: current_usage=" << stats_.current_usage << std::endl;
+
     std::cout << "Successfully returned block to free list" << std::endl;
 }
 
@@ -127,27 +137,66 @@ void FreeListAllocator::reset_stats() {
 // TODO: 在后续版本中实现这些私有方法
 void* FreeListAllocator::allocate_from_free_list(size_t size, size_t alignment) {
     std::cout << "Trying to allocate " << size << " bytes from free list" << std::endl;
-    
-    // 查找合适的块
-    FreeBlock* suitable_block = find_suitable_block(size, alignment);
-    if (suitable_block == nullptr) {
+
+    // 查找考虑头部与对齐后的合适块
+    FreeBlock* block = find_suitable_block(size, alignment);
+    if (block == nullptr) {
         std::cout << "No suitable block found in free list" << std::endl;
         return nullptr;
     }
-    
-    // 从自由列表中移除这个块
-    remove_from_free_list(suitable_block);
-    
-    // 计算对齐的指针
-    void* aligned_ptr = align_pointer(suitable_block, alignment);
-    
-    // 简单实现：暂时不分割块，直接返回整个块
-    // TODO: 后续实现split_block来提高内存利用率
-    
-    std::cout << "Allocated " << suitable_block->size << " bytes at " << aligned_ptr 
-              << " (requested " << size << " bytes)" << std::endl;
-    
-    return aligned_ptr;
+
+    // 从自由列表移除选中的块
+    remove_from_free_list(block);
+
+    const size_t header_size = sizeof(AllocationHeader);
+    char* block_start = reinterpret_cast<char*>(block);
+    char* block_end = block_start + block->size;
+
+    // 计算用户指针与头部位置
+    char* user_ptr = reinterpret_cast<char*>(align_pointer(block_start + header_size, alignment));
+    char* header_addr = user_ptr - header_size;
+
+    size_t prefix_size = static_cast<size_t>(header_addr - block_start);
+    char* used_end = user_ptr + size;
+    size_t suffix_size = static_cast<size_t>(block_end - used_end);
+
+    // 如果前缀足够大，作为自由块回收
+    if (prefix_size >= MIN_BLOCK_SIZE) {
+        FreeBlock* prefix = reinterpret_cast<FreeBlock*>(block_start);
+        prefix->size = prefix_size;
+        prefix->next = prefix->prev = nullptr;
+        add_to_free_list(prefix);
+        block_start = header_addr; // 分配从头部开始
+        prefix_size = 0;
+    }
+
+    // 默认 span 覆盖 [block_start, used_end)
+    size_t span = static_cast<size_t>(used_end - block_start);
+
+    // 如果尾部足够大，分裂成自由块；否则并入此次分配
+    if (suffix_size >= MIN_BLOCK_SIZE) {
+        FreeBlock* suffix = reinterpret_cast<FreeBlock*>(used_end);
+        suffix->size = suffix_size;
+        suffix->next = suffix->prev = nullptr;
+        add_to_free_list(suffix);
+    } else {
+        span = static_cast<size_t>(block_end - block_start);
+    }
+
+    // 写入分配头部
+    AllocationHeader* header = reinterpret_cast<AllocationHeader*>(header_addr);
+    header->span = span;
+    header->requested = size;
+    header->prefix_size = prefix_size;
+
+    std::cout << "Write header at " << (void*)header_addr
+              << " {span=" << header->span
+              << ", requested=" << header->requested
+              << ", prefix=" << header->prefix_size << "}" << std::endl;
+
+    std::cout << "Allocated span=" << span << " at " << (void*)user_ptr
+              << " (requested " << size << ")" << std::endl;
+    return static_cast<void*>(user_ptr);
 }
 
 void FreeListAllocator::add_to_free_list(FreeBlock* block) {
@@ -201,28 +250,24 @@ void FreeListAllocator::remove_from_free_list(FreeBlock* block) {
 
 FreeListAllocator::FreeBlock* FreeListAllocator::find_suitable_block(size_t size, size_t alignment) {
     std::cout << "Looking for block of size " << size << " with alignment " << alignment << std::endl;
-    
+
+    const size_t header_size = sizeof(AllocationHeader);
     FreeBlock* current = free_list_head_;
     while (current != nullptr) {
         std::cout << "  Checking block at " << current << " with size " << current->size << std::endl;
-        
-        // 检查这个块是否足够大
-        if (current->size >= size) {
-            // 检查对齐要求
-            char* block_start = reinterpret_cast<char*>(current);
-            char* aligned_start = reinterpret_cast<char*>(align_pointer(block_start, alignment));
-            char* block_end = block_start + current->size;
-            
-            // 确保对齐后仍有足够空间
-            if (aligned_start + size <= block_end) {
-                std::cout << "  Found suitable block at " << current << std::endl;
-                return current;
-            }
+
+        char* block_start = reinterpret_cast<char*>(current);
+        char* block_end = block_start + current->size;
+
+        char* user_ptr = reinterpret_cast<char*>(align_pointer(block_start + header_size, alignment));
+        if (user_ptr < block_end && user_ptr + size <= block_end) {
+            std::cout << "  Found suitable block at " << current << std::endl;
+            return current;
         }
-        
+
         current = current->next;
     }
-    
+
     std::cout << "  No suitable block found" << std::endl;
     return nullptr;
 }

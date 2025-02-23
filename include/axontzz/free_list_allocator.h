@@ -46,6 +46,13 @@ public:
     const char* get_name() const override { return "FreeListAllocator"; }
     
 private:
+    // Per-allocation header placed immediately before the user pointer
+    struct AllocationHeader {
+        size_t span;         // Total bytes consumed from the original free block
+        size_t requested;    // Payload size requested by caller
+        size_t prefix_size;  // Bytes before header absorbed from the original block
+    };
+
     // Free block header - stored at the beginning of each free block
     struct FreeBlock {
         size_t size;           // Size of this free block (including header)

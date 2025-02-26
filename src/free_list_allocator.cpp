@@ -109,6 +109,9 @@ void FreeListAllocator::deallocate(void* ptr, size_t size) {
 
     add_to_free_list(block);
 
+    // 尝试合并相邻的自由块
+    coalesce_free_blocks();
+
     // 使用真实请求大小更新统计信息
     std::cout << "Stats before dealloc: current_usage=" << stats_.current_usage
               << ", payload=" << payload << std::endl;
@@ -121,9 +124,27 @@ void FreeListAllocator::deallocate(void* ptr, size_t size) {
 }
 
 bool FreeListAllocator::owns(void* ptr) const {
-    // 临时实现：假设我们拥有所有非空指针
-    // TODO: 在后续版本中实现真正的所有权检查
-    return ptr != nullptr;
+    if (ptr == nullptr) {
+        return false;
+    }
+    
+    // 检查指针是否在我们管理的任何内存区域内
+    MemoryRegion* current = regions_head_;
+    while (current != nullptr) {
+        char* region_start = static_cast<char*>(current->start);
+        char* region_end = region_start + current->size;
+        char* check_ptr = static_cast<char*>(ptr);
+        
+        if (check_ptr >= region_start && check_ptr < region_end) {
+            std::cout << "Pointer " << ptr << " is owned (in region " 
+                      << current->start << "-" << (void*)region_end << ")" << std::endl;
+            return true;
+        }
+        current = current->next;
+    }
+    
+    std::cout << "Pointer " << ptr << " is NOT owned by this allocator" << std::endl;
+    return false;
 }
 
 FreeListAllocator::AllocatorStats FreeListAllocator::get_stats() const {
@@ -273,11 +294,118 @@ FreeListAllocator::FreeBlock* FreeListAllocator::find_suitable_block(size_t size
 }
 
 void FreeListAllocator::split_block(FreeBlock* block, size_t needed_size) {
-    // 暂未实现
+    if (block == nullptr || needed_size == 0) {
+        std::cout << "Warning: split_block called with invalid parameters" << std::endl;
+        return;
+    }
+    
+    std::cout << "Splitting block " << block << " (size " << block->size 
+              << ") to needed size " << needed_size << std::endl;
+    
+    // 检查是否值得分裂
+    if (block->size <= needed_size + MIN_BLOCK_SIZE) {
+        std::cout << "Block too small to split, keeping as is" << std::endl;
+        return;
+    }
+    
+    // 计算剩余部分
+    size_t remaining_size = block->size - needed_size;
+    
+    // 创建新的自由块从剩余部分
+    char* block_start = reinterpret_cast<char*>(block);
+    FreeBlock* new_block = reinterpret_cast<FreeBlock*>(block_start + needed_size);
+    
+    new_block->size = remaining_size;
+    new_block->next = nullptr;
+    new_block->prev = nullptr;
+    
+    // 调整原块大小
+    block->size = needed_size;
+    
+    // 将新块添加到自由列表
+    add_to_free_list(new_block);
+    
+    std::cout << "Split complete: original block " << block << " (size " << block->size 
+              << "), new block " << new_block << " (size " << new_block->size << ")" << std::endl;
 }
 
 void FreeListAllocator::coalesce_free_blocks() {
-    // 暂未实现
+    std::cout << "Starting coalesce_free_blocks" << std::endl;
+    
+    if (free_list_head_ == nullptr) {
+        return;
+    }
+    
+    bool merged = true;
+    int iterations = 0;
+    const int max_iterations = 100; // 防止无限循环
+    
+    while (merged && iterations < max_iterations) {
+        merged = false;
+        iterations++;
+        
+        // 遍历自由列表，寻找相邻的块进行合并
+        FreeBlock* current = free_list_head_;
+        while (current != nullptr) {
+            FreeBlock* next_in_list = current->next;
+            
+            // 检查当前块是否与列表中其他块相邻
+            FreeBlock* check = free_list_head_;
+            while (check != nullptr) {
+                if (check != current) {
+                    char* current_start = reinterpret_cast<char*>(current);
+                    char* current_end = current_start + current->size;
+                    char* check_start = reinterpret_cast<char*>(check);
+                    char* check_end = check_start + check->size;
+                    
+                    // 检查 current 是否紧邻 check 之后
+                    if (current_end == check_start) {
+                        std::cout << "Merging block " << current << " (size " << current->size 
+                                  << ") with block " << check << " (size " << check->size << ")" << std::endl;
+                        
+                        // 扩展 current 块包含 check 块
+                        current->size += check->size;
+                        
+                        // 从自由列表中移除 check
+                        remove_from_free_list(check);
+                        
+                        merged = true;
+                        std::cout << "Merged result: block " << current << " now has size " << current->size << std::endl;
+                        break;
+                    }
+                    
+                    // 检查 check 是否紧邻 current 之后  
+                    if (check_end == current_start) {
+                        std::cout << "Merging block " << check << " (size " << check->size 
+                                  << ") with block " << current << " (size " << current->size << ")" << std::endl;
+                        
+                        // 扩展 check 块包含 current 块
+                        check->size += current->size;
+                        
+                        // 从自由列表中移除 current
+                        remove_from_free_list(current);
+                        
+                        merged = true;
+                        std::cout << "Merged result: block " << check << " now has size " << check->size << std::endl;
+                        break;
+                    }
+                }
+                check = check->next;
+            }
+            
+            if (merged) {
+                break; // 重新开始扫描
+            }
+            
+            current = next_in_list;
+        }
+    }
+    
+    if (iterations >= max_iterations) {
+        std::cout << "Warning: coalesce_free_blocks hit iteration limit" << std::endl;
+    }
+    
+    std::cout << "Coalesce completed after " << iterations << " iterations" << std::endl;
 }
 
 bool FreeListAllocator::expand_heap(size_t min_size) {

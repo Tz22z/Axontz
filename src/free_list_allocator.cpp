@@ -27,9 +27,26 @@ FreeListAllocator::FreeListAllocator(MemorySource& memory_source, size_t initial
 }
 
 FreeListAllocator::~FreeListAllocator() {
-    std::cout << "FreeListAllocator destroyed" << std::endl;
-    
-    // TODO: 在后续版本中释放所有内存区域
+    std::cout << "FreeListAllocator 销毁，释放所有内存区域" << std::endl;
+
+    // 释放所有内存区域
+    MemoryRegion* current = regions_head_;
+    size_t region_count = 0;
+
+    while (current != nullptr) {
+        MemoryRegion* next = current->next;
+
+        std::cout << "释放内存区域 " << region_count << "："
+                  << current->start << "（大小：" << current->size << " 字节）" << std::endl;
+
+        // 将内存归还给操作系统
+        memory_source_.deallocate_block(current->start, current->size);
+
+        current = next;
+        region_count++;
+    }
+
+    std::cout << "FreeListAllocator 已释放 " << region_count << " 个内存区域" << std::endl;
 }
 
 void* FreeListAllocator::allocate(size_t size, size_t alignment) {
@@ -148,7 +165,29 @@ bool FreeListAllocator::owns(void* ptr) const {
 }
 
 FreeListAllocator::AllocatorStats FreeListAllocator::get_stats() const {
-    return stats_;
+    AllocatorStats stats = stats_;
+
+    // 计算碎片率
+    size_t total_free_space = 0;
+    size_t largest_free_block = 0;
+
+    FreeBlock* free_block = free_list_head_;
+    while (free_block != nullptr) {
+        total_free_space += free_block->size;
+        if (free_block->size > largest_free_block) {
+            largest_free_block = free_block->size;
+        }
+        free_block = free_block->next;
+    }
+
+    if (total_free_space > 0) {
+        stats.fragmentation_ratio = static_cast<double>(total_free_space - largest_free_block)
+                                   / static_cast<double>(total_free_space);
+    } else {
+        stats.fragmentation_ratio = 0.0;
+    }
+
+    return stats;
 }
 
 void FreeListAllocator::reset_stats() {
@@ -471,13 +510,97 @@ bool FreeListAllocator::validate_free_list() const {
 }
 
 void FreeListAllocator::dump_free_list() const {
-    std::cout << "=== Free List Dump (Basic Version) ===" << std::endl;
-    std::cout << "Current stats:" << std::endl;
-    std::cout << "  Total allocated: " << stats_.total_allocated << " bytes" << std::endl;
-    std::cout << "  Current usage: " << stats_.current_usage << " bytes" << std::endl;
-    std::cout << "  Allocations: " << stats_.allocation_count << std::endl;
-    std::cout << "  Deallocations: " << stats_.deallocation_count << std::endl;
-    std::cout << "===================================" << std::endl;
+    std::cout << "=== FreeList 分配器转储 ===" << std::endl;
+
+    // 计算总容量和自由空间
+    size_t total_capacity = 0;
+    size_t total_free_space = 0;
+    size_t free_block_count = 0;
+
+    // 计算总容量
+    MemoryRegion* region = regions_head_;
+    while (region != nullptr) {
+        total_capacity += region->size;
+        region = region->next;
+    }
+
+    // 计算自由空间
+    FreeBlock* free_block = free_list_head_;
+    while (free_block != nullptr) {
+        total_free_space += free_block->size;
+        free_block_count++;
+        free_block = free_block->next;
+    }
+
+    // 计算碎片率
+    // 碎片率 = (自由空间 - 最大自由块) / 自由空间
+    // 如果自由空间全部在一个块中，碎片率为0；如果分散成很多小块，碎片率接近1
+    size_t largest_free_block = 0;
+    free_block = free_list_head_;
+    while (free_block != nullptr) {
+        if (free_block->size > largest_free_block) {
+            largest_free_block = free_block->size;
+        }
+        free_block = free_block->next;
+    }
+
+    double fragmentation_ratio = 0.0;
+    if (total_free_space > 0) {
+        fragmentation_ratio = static_cast<double>(total_free_space - largest_free_block)
+                             / static_cast<double>(total_free_space);
+    }
+
+    // 基本统计信息
+    std::cout << "基本统计：" << std::endl;
+    std::cout << "  总分配量：" << stats_.total_allocated << " 字节" << std::endl;
+    std::cout << "  总释放量：" << stats_.total_deallocated << " 字节" << std::endl;
+    std::cout << "  当前使用量：" << stats_.current_usage << " 字节" << std::endl;
+    std::cout << "  分配次数：" << stats_.allocation_count << std::endl;
+    std::cout << "  释放次数：" << stats_.deallocation_count << std::endl;
+    std::cout << "  失败分配：" << stats_.failed_allocations << std::endl;
+    std::cout << std::endl;
+
+    // 内存区域信息
+    std::cout << "内存区域：" << std::endl;
+    region = regions_head_;
+    size_t region_index = 0;
+    while (region != nullptr) {
+        std::cout << "  区域 " << region_index << "："
+                  << region->start << " - "
+                  << (static_cast<char*>(region->start) + region->size)
+                  << "（" << region->size << " 字节）" << std::endl;
+        region = region->next;
+        region_index++;
+    }
+    std::cout << std::endl;
+
+    // 自由列表信息
+    std::cout << "自由列表：" << std::endl;
+    std::cout << "  总容量：" << total_capacity << " 字节" << std::endl;
+    std::cout << "  自由空间：" << total_free_space << " 字节" << std::endl;
+    std::cout << "  使用空间：" << (total_capacity - total_free_space) << " 字节" << std::endl;
+    std::cout << "  自由块数量：" << free_block_count << std::endl;
+    std::cout << "  最大自由块：" << largest_free_block << " 字节" << std::endl;
+    std::cout << "  碎片率：" << (fragmentation_ratio * 100.0) << "%" << std::endl;
+    std::cout << std::endl;
+
+    // 详细的自由块列表
+    if (free_block_count > 0) {
+        std::cout << "自由块详情：" << std::endl;
+        free_block = free_list_head_;
+        size_t block_index = 0;
+        while (free_block != nullptr && block_index < 20) { // 最多显示20个
+            std::cout << "  块 " << block_index << "："
+                      << free_block << "（大小：" << free_block->size << " 字节）" << std::endl;
+            free_block = free_block->next;
+            block_index++;
+        }
+        if (free_block != nullptr) {
+            std::cout << "  ... (" << (free_block_count - block_index) << " 个块未显示)" << std::endl;
+        }
+    }
+
+    std::cout << "================================" << std::endl;
 }
 
 } // namespace memplumber
